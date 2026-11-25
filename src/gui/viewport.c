@@ -386,7 +386,8 @@ void GUI_Widget_Viewport_Draw(bool forceRedraw, bool hasScrolled, bool drawToMai
 				t = &g_map[curPos];
 				left = x << 4;
 
-				if (!g_debugScenario && g_veiledTileID == t->overlayTileID) {
+				extern bool g_mh_nofog;   /* MiSTer: the OSD's fog switch */
+				if (!g_debugScenario && !g_mh_nofog && g_veiledTileID == t->overlayTileID) {
 					/* draw a black rectangle */
 					GUI_DrawFilledRectangle(left, top, left + 15, top + 15, 12);
 					continue;
@@ -394,7 +395,7 @@ void GUI_Widget_Viewport_Draw(bool forceRedraw, bool hasScrolled, bool drawToMai
 
 				GFX_DrawTile(t->groundTileID, left, top, t->houseID);
 
-				if (t->overlayTileID != 0 && !g_debugScenario) {
+				if (t->overlayTileID != 0 && !g_debugScenario && !g_mh_nofog) {
 					GFX_DrawTile(t->overlayTileID, left, top, t->houseID);
 				}
 			}
@@ -418,7 +419,7 @@ void GUI_Widget_Viewport_Draw(bool forceRedraw, bool hasScrolled, bool drawToMai
 		if (!u->o.flags.s.isDirty && !forceRedraw) continue;
 		u->o.flags.s.isDirty = false;
 
-		if (!g_map[Tile_PackTile(u->o.position)].isUnveiled && !g_debugScenario) continue;
+		{ extern bool g_mh_nofog; if (!g_map[Tile_PackTile(u->o.position)].isUnveiled && !g_debugScenario && !g_mh_nofog) continue; }
 
 		sprite = g_sprites[g_table_unitInfo[u->o.type].groundSpriteID];
 		GUI_Widget_Viewport_GetSprite_HousePalette(sprite, Unit_GetHouseID(u), paletteHouse);

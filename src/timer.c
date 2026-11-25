@@ -161,6 +161,7 @@ static volatile int s_timer_count = 0;
 /* POSIX */
 static volatile sig_atomic_t s_timer_count = 0;
 #endif
+static uint32 s_mh_leave = 0, s_mh_enter = 0, s_mh_timers = 0;   /* MiSTer: where a slow iteration spent its time */
 
 static void Timer_Handler(int sig)
 {
@@ -172,6 +173,7 @@ static void Timer_Handler(int sig)
 
 void SleepAndProcessBackgroundTasks(void)
 {
+	s_mh_enter = Timer_GetTime();
 	while (s_timer_count == 0) {
 #if defined(_WIN32)
 		Sleep(2); /* TODO : use a semaphore */
@@ -184,16 +186,20 @@ void SleepAndProcessBackgroundTasks(void)
 	}
 	/* timer signal SIGALRM has been triggered */
 	if (s_timer_count > 1) {
-		Warning("s_timer_count = %d\n", (int)s_timer_count);
+		Warning("s_timer_count = %d (the game loop %u ms, the timers %u ms)\n", (int)s_timer_count,
+		        (unsigned)(s_mh_leave ? s_mh_enter - s_mh_leave : 0), (unsigned)s_mh_timers);
 	}
 	s_timer_count = 0;
+	s_mh_timers = Timer_GetTime();
 	Timer_InterruptRun(0);
+	s_mh_timers = Timer_GetTime() - s_mh_timers;
 	if(s_timer_count > 0) {
 		/* one more iteration if SIGALRM has been triggered
 		 * during Timer_InterruptRun() */
 		s_timer_count = 0;
 		Timer_InterruptRun(1);	/* don't run "callonce" timers */
 	}
+	s_mh_leave = Timer_GetTime();
 }
 #endif /* _WIN32 */
 

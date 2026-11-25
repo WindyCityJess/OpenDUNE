@@ -1538,6 +1538,7 @@ bool Unit_Damage(Unit *unit, uint16 damage, uint16 range)
 	ui = &g_table_unitInfo[unit->o.type];
 
 	if (!ui->flags.isNormalUnit && unit->o.type != UNIT_SANDWORM) return false;
+	{ extern bool g_mh_god; if (g_mh_god && unit->o.houseID == g_playerHouseID) return false; }   /* MiSTer: the OSD's God Mode */
 
 	if (unit->o.hitpoints != 0) alive = true;
 

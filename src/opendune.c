@@ -70,6 +70,7 @@
 #include "tools.h"
 #include "unit.h"
 #include "video/video.h"
+#include <mister_hybrid.h>   /* MiSTer: hybrid/hps/mister_hybrid.h, copied into include/ by opendune_build.sh */
 
 #ifdef TOS
 #include "rev.h"
@@ -899,6 +900,44 @@ static void InGame_Numpad_Move(uint16 key)
 	}
 }
 
+/* MiSTer (patch_opendune_cheats.py): the ECWolf core's OSD Cheats page. God Mode (bit 35): the player's units and
+ * structures take no damage. T56 "Give Weapons/Ammo/Keys": 5000 credits. T57 "Next Level": the mission is won. */
+bool g_mh_god = false;
+bool g_mh_nofog = false;   /* bit 37: the fog of war lifted (map.c, gui/viewport.c) */
+static void MiSTer_CheatsTick(void)
+{
+	uint64_t s = MH_OSDStatus();
+	bool god = ((s >> 35) & 1) != 0;
+	bool ctrl = ((s >> 36) & 1) != 0;    /* bits 36 and 37: entries the ECWolf core does not have yet (always 0 with it);
+	                                        the lines for a core build are in Corridor7AlienInvasion\build-tools\ECWolf.sv.cheats */
+	bool nofog = ((s >> 37) & 1) != 0;
+	int trig = MH_OSDTriggers();
+
+	if (god != g_mh_god) {
+		g_mh_god = god;
+		GUI_DisplayText(god ? "GOD MODE ON" : "GOD MODE OFF", 2);
+	}
+	if (ctrl != g_debugGame) {
+		g_debugGame = ctrl;      /* opendune.ini's debug_game at run time: the enemy's units can be selected and ordered */
+		GUI_DisplayText(ctrl ? "CONTROL OF ENEMY UNITS ON" : "CONTROL OF ENEMY UNITS OFF", 2);
+	}
+	if (nofog != g_mh_nofog) {
+		g_mh_nofog = nofog;
+		GUI_DisplayText(nofog ? "FOG OFF" : "FOG ON", 2);
+	}
+	if ((trig & 1) != 0 && g_playerHouse != NULL) {
+		uint32 c = (uint32)g_playerHouse->credits + 5000;
+		if (c > 65000) c = 65000;
+		g_playerHouse->credits = (uint16)c;
+		if (g_playerCreditsNoSilo < g_playerHouse->credits) g_playerCreditsNoSilo = g_playerHouse->credits;
+		GUI_DisplayText("5000 CREDITS", 2);
+	}
+	if ((trig & 2) != 0) {
+		s_debugForceWin = true;
+		GUI_DisplayText("MISSION WON", 2);
+	}
+}
+
 /**
  * Main game loop.
  */
@@ -1108,6 +1147,7 @@ static void GameLoop_Main(void)
 
 			GUI_DrawCredits(g_playerHouseID, 0);
 
+			MiSTer_CheatsTick();
 			GameLoop_Team();
 			GameLoop_Unit();
 			GameLoop_Structure();

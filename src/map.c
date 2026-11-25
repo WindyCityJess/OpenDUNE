@@ -8,6 +8,7 @@
 #include "os/math.h"
 
 #include "map.h"
+extern bool g_mh_nofog;   /* MiSTer: the OSD's fog switch (opendune.c) */
 
 #include "animation.h"
 #include "audio/sound.h"
@@ -106,7 +107,7 @@ void Map_SetSelection(uint16 packed)
 		return;
 	}
 
-	if ((packed != 0xFFFF && g_map[packed].overlayTileID != g_veiledTileID) || g_debugScenario) {
+	if ((packed != 0xFFFF && g_map[packed].overlayTileID != g_veiledTileID) || g_debugScenario || g_mh_nofog) {
 		Structure *s;
 
 		s = Structure_Get_ByPackedTile(packed);
@@ -342,7 +343,7 @@ bool Map_IsPositionUnveiled(uint16 position)
 {
 	Tile *t;
 
-	if (g_debugScenario) return true;
+	if (g_debugScenario || g_mh_nofog) return true;   /* MiSTer: the OSD's fog switch */
 
 	t = &g_map[position];
 

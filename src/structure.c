@@ -1043,6 +1043,7 @@ bool Structure_Damage(Structure *s, uint16 damage, uint16 range)
 	if (s == NULL) return false;
 	if (damage == 0) return false;
 	if (s->o.script.variables[0] == 1) return false;
+	{ extern bool g_mh_god; if (g_mh_god && s->o.houseID == g_playerHouseID) return false; }   /* MiSTer: the OSD's God Mode */
 
 	si = &g_table_structureInfo[s->o.type];
 

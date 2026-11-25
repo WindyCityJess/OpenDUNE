@@ -44,6 +44,7 @@ static SDL_Renderer *s_renderer;
 static SDL_Texture *s_texture;
 
 static uint32 s_palette[256];
+static uint16 s_palette16[256];   /* MiSTer: the same in RGB565 */
 static bool s_screen_needrepaint = false;
 
 static uint8 s_keyBufferLatest = 0;
@@ -284,6 +285,70 @@ int Video_CreateWindowAndRenderer(int width, int height, Uint32 window_flags, Ui
     return 0;
 }
 
+
+/* MiSTer (patch_opendune_mister.py): the hybrid core's gamepad as the mouse and the arrow keys. */
+static SDL_Joystick *mh_joy = NULL;
+static float mh_cx = 160.0f, mh_cy = 100.0f;
+static uint8 mh_arrow_down[4];              /* up, down, left, right */
+static const uint8 mh_arrow_code[4] = { 0x48, 0x50, 0x4B, 0x4D };
+static int mh_btn_down[32];
+
+static void mh_pad_init(void)
+{
+	if (mh_joy != NULL) return;
+	if (!SDL_WasInit(SDL_INIT_JOYSTICK)) SDL_InitSubSystem(SDL_INIT_JOYSTICK);
+	if (SDL_NumJoysticks() > 0) mh_joy = SDL_JoystickOpen(0);
+	SDL_JoystickEventState(SDL_ENABLE);
+}
+
+static void mh_arrow(int i, int down)
+{
+	if (down == mh_arrow_down[i]) return;
+	mh_arrow_down[i] = down;
+	Video_Key_Callback(mh_arrow_code[i] | (down ? 0 : 0x80));
+}
+
+static void mh_pad_event(const SDL_Event *e)
+{
+	if (e->type == SDL_JOYBUTTONDOWN || e->type == SDL_JOYBUTTONUP) {
+		int b = e->jbutton.button, down = (e->type == SDL_JOYBUTTONDOWN);
+		if (e->jbutton.which != 0 || b < 0 || b >= 32 || mh_btn_down[b] == down) return;
+		mh_btn_down[b] = down;
+		switch (b) {
+			case 0: case 2: Video_Mouse_Button(true, down); break;    /* Fire, Run: the left button */
+			case 1: Video_Mouse_Button(false, down); break;           /* Open: the right button */
+			case 7: case 29: Video_Key_Callback(0x01 | (down ? 0 : 0x80)); break;   /* Menu, Menu Back: Esc */
+			case 28: Video_Key_Callback(0x1C | (down ? 0 : 0x80)); break;           /* Menu OK: Enter */
+		}
+	} else if (e->type == SDL_JOYHATMOTION) {
+		int v = e->jhat.value;
+		if (e->jhat.which != 0 || e->jhat.hat != 0) return;
+		mh_arrow(0, (v & SDL_HAT_UP) != 0); mh_arrow(1, (v & SDL_HAT_DOWN) != 0);
+		mh_arrow(2, (v & SDL_HAT_LEFT) != 0); mh_arrow(3, (v & SDL_HAT_RIGHT) != 0);
+	}
+}
+
+/* once a frame: the left stick moves the pointer, the right stick scrolls */
+static void mh_pad_tick(void)
+{
+	int x, y, rx, ry, nx, ny;
+	if (mh_joy == NULL) return;
+	x = SDL_JoystickGetAxis(mh_joy, 0); y = SDL_JoystickGetAxis(mh_joy, 1);
+	rx = SDL_JoystickGetAxis(mh_joy, 2); ry = SDL_JoystickGetAxis(mh_joy, 3);
+	if (x > -6000 && x < 6000) x = 0;
+	if (y > -6000 && y < 6000) y = 0;
+	if (x != 0 || y != 0) {
+		mh_cx += x * (5.0f / 32768.0f); mh_cy += y * (5.0f / 32768.0f);
+		if (mh_cx < 0) mh_cx = 0; if (mh_cx > SCREEN_WIDTH * s_screen_magnification - 1) mh_cx = SCREEN_WIDTH * s_screen_magnification - 1;
+		if (mh_cy < 0) mh_cy = 0; if (mh_cy > SCREEN_HEIGHT * s_screen_magnification - 1) mh_cy = SCREEN_HEIGHT * s_screen_magnification - 1;
+		nx = (int)mh_cx; ny = (int)mh_cy;
+		if (nx != s_mousePosX || ny != s_mousePosY) Video_Mouse_Move(nx, ny);
+	} else {
+		mh_cx = s_mousePosX; mh_cy = s_mousePosY;   /* a real mouse moved it */
+	}
+	mh_arrow(0, ry < -12000); mh_arrow(1, ry > 12000); mh_arrow(2, rx < -12000); mh_arrow(3, rx > 12000);
+}
+
 /**
  * Initialize the video driver.
  */
@@ -337,6 +402,7 @@ bool Video_Init(int screen_magnification, VideoScaleFilter filter)
 	}
 
 	SDL_SetWindowTitle(s_window, window_caption);
+	mh_pad_init();
 
 #ifndef WITHOUT_SDLIMAGE
 	icon = IMG_Load(DUNE_ICON_DIR "opendune.png");
@@ -579,11 +645,37 @@ static void Video_DrawScreen_Hqx(void)
 	}
 }
 
+
+/* MiSTer (patch_opendune_perf.py): at scale 1 the 8-bit screen goes straight into the window surface (RGB565 on
+ * the hybrid SDL), the dirty rectangle only; the software renderer's present hands that same surface to the
+ * core. Saves the 32-bit texture fill and the renderer's 32->16 blit of the whole frame. */
+static bool mh_direct_draw(void)
+{
+	SDL_Surface *win = SDL_GetWindowSurface(s_window);
+	const uint8 *src = GFX_Screen_Get_ByIndex(SCREEN_0);
+	struct dirty_area *area = GFX_Screen_GetDirtyArea(SCREEN_0);
+	int x0 = 0, y0 = 0, x1 = SCREEN_WIDTH, y1 = SCREEN_HEIGHT, x, y;
+
+	if (win == NULL || win->pixels == NULL || win->format->BytesPerPixel != 2 || win->w < SCREEN_WIDTH || win->h < SCREEN_HEIGHT) return false;
+	src += (s_screenOffset << 2);
+	if (!s_screen_needrepaint && area && (area->left > 0 || area->top > 0 || area->right < SCREEN_WIDTH || area->bottom < SCREEN_HEIGHT)) {
+		x0 = area->left; y0 = area->top; x1 = area->right; y1 = area->bottom;
+	}
+	for (y = y0; y < y1; y++) {
+		uint16 *d = (uint16 *)((uint8 *)win->pixels + y * win->pitch) + x0;
+		const uint8 *s = src + y * SCREEN_WIDTH + x0;
+		for (x = x0; x < x1; x++) *d++ = s_palette16[*s++];
+	}
+	return true;
+}
+
 static void Video_DrawScreen(void)
 {
 	if (!GFX_Screen_IsDirty(SCREEN_0) && !s_screen_needrepaint) return;
 
-	if (s_screen_magnification == 1) {
+	if (s_screen_magnification == 1 && mh_direct_draw()) {
+		/* drawn above; the present below hands the window surface over */
+	} else if (s_screen_magnification == 1) {
 		Video_DrawScreen_Nearest_Neighbor();
 	} else switch (s_scale_filter) {
 	case FILTER_NEAREST_NEIGHBOR:
@@ -616,6 +708,7 @@ void Video_Tick(void)
 	if (s_video_lock) return;
 
 	s_video_lock = true;
+	mh_pad_tick();
 
 	if (s_showFPS) {
 		Video_ShowFPS(GFX_Screen_Get_ByIndex(SCREEN_0));
@@ -693,17 +786,15 @@ void Video_Tick(void)
 				Video_Key_Callback(code | (keyup ? 0x80 : 0x0));
 			} break;
 
+			case SDL_JOYBUTTONDOWN:
+			case SDL_JOYBUTTONUP:
+			case SDL_JOYHATMOTION:
+				mh_pad_event(&event);
+				break;
+
 			case SDL_WINDOWEVENT:
 				if (event.window.event == SDL_WINDOWEVENT_EXPOSED) {
-					/* Clear area outside the 4:3 logical screen, if any */
-					SDL_RenderClear(s_renderer);
-
-					if (SDL_RenderCopy(s_renderer, s_texture, NULL, NULL)) {
-						Error("SDL_RenderCopy failed : %s\n", SDL_GetError());
-					}
-
-					SDL_RenderPresent(s_renderer);
-					draw = false;
+					s_screen_needrepaint = true;   /* MiSTer: repainted below (the texture is not drawn at scale 1) */
 				}
 				break;
 		}
@@ -734,6 +825,7 @@ void Video_SetPalette(void *palette, int from, int length)
 		             | ((((p[0] & 0x3F) * 0x41) << 12) & 0x00ff0000) /* r */
 		             | ((((p[1] & 0x3F) * 0x41) << 4)  & 0x0000ff00) /* g */
 		             |  (((p[2] & 0x3F) * 0x41) >> 4); /* b */
+		s_palette16[i] = (uint16)(((s_palette[i] >> 8) & 0xf800) | ((s_palette[i] >> 5) & 0x07e0) | ((s_palette[i] >> 3) & 0x001f));
 		p += 3;
 	}
 
